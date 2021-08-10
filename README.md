@@ -1,6 +1,6 @@
 # lua-resty-weauth
 
-使用 ngx_lua 的基于企业微信组织架构的登录认证
+适用于 OpenResty/ngx_lua 的基于企业微信组织架构的登录认证
 
 ## 使用
 
