@@ -5,7 +5,7 @@ local json = require("cjson")
 local jwt = require("resty.jwt")
 local redis = require("resty.redis")
 local http = require("resty.http")
-local redis_lock = require("resty.redis_lock")
+local redis_lock = require("resty.redis.lock")
 local ngx = require("ngx")
 
 local ok, new_tab = pcall(require, "table.new")

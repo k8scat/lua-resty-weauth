@@ -4,6 +4,19 @@
 
 ## 使用
 
+### 下载
+
+```bash
+cd /path/to
+git clone git@github.com:ledgetech/lua-resty-http.git
+git clone git@github.com:SkyLothar/lua-resty-jwt.git
+git clone git@github.com:openresty/lua-resty-redis.git
+git clone git@github.com:bakins/lua-resty-redis-lock.git
+git clone git@github.com:k8scat/lua-resty-weauth.git
+```
+
+### 配置
+
 ```conf
 lua_package_path "/path/to/lua-resty-weauth/lib/?.lua;/path/to/lua-resty-jwt/lib/?.lua;/path/to/lua-resty-http/lib/?.lua;/path/to/lua-resty-redis/lib/?.lua;/path/to/lua-resty-redis-lock/lib/?.lua;;";
 
