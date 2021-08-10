@@ -50,3 +50,11 @@ server {
 - [lua-resty-jwt](https://github.com/SkyLothar/lua-resty-jwt)
 - [lua-resty-redis](https://github.com/openresty/lua-resty-redis)
 - [lua-resty-redis-lock](https://github.com/bakins/lua-resty-redis-lock)
+
+## 作者
+
+K8sCat <k8scat@gmail.com>
+
+## 开源协议
+
+[MIT](./LICENSE)
