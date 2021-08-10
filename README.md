@@ -32,6 +32,9 @@ server {
 
         weauth.jwt_secret = "thisisjwtsecret"
 
+        weauth.redis_host = "127.0.0.1"
+        weauth.redis_port = 6379
+
         weauth.ip_blacklist = {}
         weauth.uri_whitelist = {"/"}
         weauth.department_whitelist = {1, 2}
