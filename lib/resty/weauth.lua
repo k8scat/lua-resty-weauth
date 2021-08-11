@@ -3,9 +3,7 @@
 
 local json = require("cjson")
 local jwt = require("resty.jwt")
-local redis = require("resty.redis")
 local http = require("resty.http")
-local redis_lock = require("resty.redis.lock")
 local ngx = require("ngx")
 
 local ok, new_tab = pcall(require, "table.new")
@@ -13,14 +11,11 @@ if not ok or type(new_tab) ~= "function" then
     new_tab = function (narr, nrec) return {} end
 end
 
-local jwt_header_iss = "weauth"
 local jwt_header_alg = "HS256"
-
-local redis_key_access_token = "weauth_access_token"
 
 local _M = new_tab(0, 30)
 
-_M._VERSION = "0.0.1"
+_M._VERSION = "0.0.3"
 
 _M.corp_id = ""
 _M.app_agent_id = ""
@@ -28,16 +23,8 @@ _M.app_secret = ""
 _M.callback_uri = "/weauth_callback"
 _M.app_domain = ""
 
-_M.access_token = ""
-
 _M.jwt_secret = ""
-_M.jwt_expire = 86400
-
-_M.redis_host = "127.0.0.1"
-_M.redis_port = 6379
-_M.redis_sock = ""
-_M.redis_pass = ""
-_M.redis_db = 0
+_M.jwt_expire = 28800 -- 8小时
 
 _M.logout_uri = "/weauth_logout"
 _M.logout_redirect = "/"
@@ -59,8 +46,8 @@ local function http_get(url, query)
 end
 
 local function has_value(tab, val)
-    for i, v in ipairs(tab) do
-        if v == val then
+    for i=1, #tab do
+        if tab[i] == val then
             return true
         end
     end
@@ -68,53 +55,23 @@ local function has_value(tab, val)
 end
 
 function _M:get_access_token()
-    local red, err = self:redis_connect()
-    if not red then
+    local url = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
+    local query = {
+        corpid = self.corp_id,
+        corpsecret = self.app_secret
+    }
+    local res, err = http_get(url, query)
+    if not res then
         return nil, err
     end
-    local res, err = red:get(redis_key_access_token)
-    if res and res ~= ngx.null then
-        return res
+    if res.status ~= 200 then
+        return nil, res.body
     end
-    ngx.log(ngx.ERR, "failed to get token from redis: ", err)
-
-    local access_token = nil
-    local l = redis_lock.new(red, redis_key_access_token)
-    if l:lock() then
-        ngx.log(ngx.ERR, "redis locked")
-        res, err = red:get(redis_key_access_token)
-        if res and res ~= ngx.null then
-            return res
-        end
-        ngx.log(ngx.ERR, "still failed to get token from redis: ", err)
-
-        local url = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
-        local query = {
-            corpid = self.corp_id,
-            corpsecret = self.app_secret
-        }
-        res, err = http_get(url, query)
-        if not res then
-            return nil, err
-        end
-        if res.status ~= 200 then
-            return nil, res.body
-        end
-        local data = json.decode(res.body)
-        if data["errcode"] ~= 0 then
-            return nil, res.body
-        end
-
-        access_token = data["access_token"]
-        local expires_in = data["expires_in"]
-        local ok, err = red:setex(redis_key_access_token, expires_in, access_token)
-        if not ok then
-            ngx.log(ngx.ERR, "failed to set access token into redis: ", err)
-        end
-	    l:unlock()
-        ngx.log(ngx.ERR, "redis unlocked")
+    local data = json.decode(res.body)
+    if data["errcode"] ~= 0 then
+        return nil, res.body
     end
-    return access_token
+    return data["access_token"]
 end
 
 function _M:sso()
@@ -129,15 +86,19 @@ function _M:sso()
     return ngx.redirect("https://open.work.weixin.qq.com/wwopen/sso/qrConnect?" .. args)
 end
 
-function _M:logout()
+function _M:clear_token()
     ngx.header["Set-Cookie"] = self.cookie_key .. "=; expires=Thu, 01 Jan 1970 00:00:00 GMT"
+end
+
+function _M:logout()
+    self:clear_token()
     return ngx.redirect(self.logout_redirect)
 end
 
-function _M:get_user_id(code)
+function _M:get_user_id(access_token, code)
     local url = "https://qyapi.weixin.qq.com/cgi-bin/user/getuserinfo"
     local query = {
-        access_token = self.access_token,
+        access_token = access_token,
         code = code,
     }
     local res, err = http_get(url, query)
@@ -154,10 +115,10 @@ function _M:get_user_id(code)
     return user["UserId"]
 end
 
-function _M:get_user(user_id)
+function _M:get_user(access_token, user_id)
     local url = "https://qyapi.weixin.qq.com/cgi-bin/user/get"
     local query = {
-        access_token = self.access_token,
+        access_token = access_token,
         userid = user_id
     }
     ngx.log(ngx.ERR, "get user query: ", json.encode(query))
@@ -194,63 +155,53 @@ function _M:verify_token()
 end
 
 function _M:sign_token(user)
-    local now = ngx.time()
+    local user_id = user["userid"]
+    if not user_id or user_id == "" then
+        return nil, "invalid userid"
+    end
+    local department_ids = user["department"]
+    if not department_ids or type(department_ids) ~= "table" then
+        return nil, "invalid department"
+    end
+
     return jwt:sign(
         self.jwt_secret,
         {
             header = {
                 typ = "JWT",
                 alg = jwt_header_alg,
-                exp = now + self.jwt_expire,
-                iss = jwt_header_iss,
-                iat = now
+                exp = ngx.time() + self.jwt_expire
             },
             payload = {
-                userid = user["userid"],
-                department = json.encode(user["department"])
+                userid = user_id,
+                department = json.encode(department_ids)
             }
         }
     )
 end
 
-function _M:validate_user(payload, redirect_url)
-    local user, err = nil, nil
-    local departments = payload["department"]
-    if payload["department"] then
-        departments = json.decode(payload["department"])
-        payload["department"] = departments
-        user = payload
-    else
-        ngx.log(ngx.ERR, "login user id: ", user_id)
-        if self.access_token == "" then
-            local access_token, err = self:get_access_token()
-            if not access_token then
-                ngx.log(ngx.ERR, "get access token failed: ", err)
-                return ngx.exit(ngx.HTTP_BAD_GATEWAY)
-            end
-            self.access_token = access_token
-        end
-
-        user, err = self:get_user(user_id)
-        if not user then
-            ngx.log(ngx.ERR, "get user failed: ", err)
-            return ngx.exit(ngx.HTTP_NOT_FOUND)
-        end
-        ngx.log(ngx.ERR, "login user: ", json.encode(user))
-        departments = user["department"]
+function _M:check_user_access(user)
+    if type(self.department_whitelist) ~= "table" then
+        ngx.log(ngx.ERR, "department_whitelist is not a table")
+        return false
+    end
+    if #self.department_whitelist == 0 then
+        return true
     end
 
-    for _, v in ipairs(departments) do
-        if has_value(self.department_whitelist, v) then
-            local token = self:sign_token(user)
-            ngx.header["Set-Cookie"] = self.cookie_key .. "=" .. token
-            if redirect_url then
-                return ngx.redirect(redirect_url)
-            end
-            return
+    local department_ids = user["department"]
+    if not department_ids or department_ids == "" then
+        return false
+    end
+    if type(department_ids) ~= "table" then
+        department_ids = json.decode(department_ids)
+    end
+    for i=1, #department_ids do
+        if has_value(self.department_whitelist, department_ids[i]) then
+            return true
         end
     end
-    return ngx.exit(ngx.HTTP_FORBIDDEN)
+    return false
 end
 
 function _M:sso_callback()
@@ -265,28 +216,50 @@ function _M:sso_callback()
     ngx.log(ngx.ERR, "sso code: ", code)
 
     local access_token, err = self:get_access_token()
-    if not self.access_token then
-        ngx.log(ngx.ERR, "get access token failed: ", err)
+    if not access_token then
+        ngx.log(ngx.ERR, "get access_token failed: ", err)
         return ngx.exit(ngx.HTTP_FORBIDDEN)
     end
-    self.access_token = access_token
 
-    user_id, err = self:get_user_id(code)
+    local user_id, err = self:get_user_id(access_token, code)
     if not user_id then
         ngx.log(ngx.ERR, "get user id failed: ", err)
         return ngx.exit(ngx.HTTP_FORBIDDEN)
     end
+    ngx.log(ngx.ERR, "user id: ", user_id)
+
+    local user, err = self:get_user(access_token, user_id)
+    if not user then
+        ngx.log(ngx.ERR, "get user failed: ", err)
+        return ngx.exit(ngx.HTTP_FORBIDDEN)
+    end
+    ngx.log(ngx.ERR, "login user: ", json.encode(user))
+
+    if not self:check_user_access(user) then
+        ngx.log(ngx.ERR, "user access not permitted")
+        return self:sso()
+    end
+
+    local token, err = self:sign_token(user)
+    if not token then
+        ngx.log(ngx.ERR, "sign token failed: ", err)
+        return ngx.exit(ngx.HTTP_FORBIDDEN)
+    end
+    ngx.header["Set-Cookie"] = self.cookie_key .. "=" .. token
 
     local redirect_url = request_args["state"]
-    if redirect_url == "" then
+    if not redirect_url or redirect_url == "" then
         redirect_url = "/"
     end
-    return self:validate_user({userid=user_id}, redirect_url)
+    return ngx.redirect(redirect_url)
 end
 
 function _M:auth()
     local request_uri = ngx.var.uri
+    ngx.log(ngx.ERR, "request uri: ", request_uri)
+
     if has_value(self.uri_whitelist, request_uri) then
+        ngx.log(ngx.ERR, "uri in whitelist: ", request_uri)
         return
     end
 
@@ -302,43 +275,20 @@ function _M:auth()
 
     local payload, err = self:verify_token()
     if payload then
-        return self:validate_user(payload)
+        if self:check_user_access(payload) then
+            return
+        end
+
+        ngx.log(ngx.ERR, "user access not permitted")
+        self:clear_token()
+        return self:sso()
     end
     ngx.log(ngx.ERR, "verify token failed: ", err)
 
-    ngx.log(ngx.ERR, "request uri: ", request_uri)
     if request_uri ~= self.callback_uri then
         return self:sso()
     end
-
     return self:sso_callback()
-end
-
-function _M:redis_connect()
-    local red = redis:new()
-    red:set_timeouts(1000, 1000, 1000) -- 1 sec
-
-    local ok, err = nil, nil
-    if self.redis_sock ~= "" then
-        ok, err = red:connect(self.redis_sock)
-    else
-        ok, err = red:connect(self.redis_host, self.redis_port)
-    end
-    if not ok then
-        return nil, "connect redis failed: " .. err
-    end
-
-    if self.redis_pass ~= "" then
-        local res, err = red:auth(self.redis_pass)
-        if not res then
-            return nil, "authenticate redis failed: " .. err
-        end
-    end
-    local result = red:select(self.redis_db)
-    if result ~= "OK" then
-        return nil, "select db failed: " .. result
-    end
-    return red
 end
 
 return _M
