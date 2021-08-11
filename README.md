@@ -1,6 +1,6 @@
 # lua-resty-weauth
 
-适用于 OpenResty/ngx_lua 的基于企业微信组织架构的登录认证
+适用于 OpenResty / ngx_lua 的基于企业微信组织架构的登录认证
 
 ## 使用
 
@@ -59,7 +59,7 @@ server {
 
 ## 相关项目
 
-- [lua-resty-feishu-auth](https://github.com/k8scat/lua-resty-weauth) 适用于 OpenResty / ngx_lua 的基于[飞书](https://www.feishu.cn/)组织架构的登录认证
+- [lua-resty-feishu-auth](https://github.com/k8scat/lua-resty-feishua-auth) 适用于 OpenResty / ngx_lua 的基于[飞书](https://www.feishu.cn/)组织架构的登录认证
 
 ## 作者
 
